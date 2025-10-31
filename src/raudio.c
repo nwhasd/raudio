@@ -183,10 +183,11 @@ typedef struct tagBITMAPINFOHEADER {
 #include <stdlib.h>                     // Required for: malloc(), free()
 #include <stdio.h>                      // Required for: FILE, fopen(), fclose(), fread()
 #include <string.h>                     // Required for: strcmp() [Used in IsFileExtension(), LoadWaveFromMemory(), LoadMusicStreamFromMemory()]
+#include "external/log.h"
 
 #if defined(RAUDIO_STANDALONE)
     #ifndef TRACELOG
-        #define TRACELOG(level, ...)    printf(__VA_ARGS__)
+        #define TRACELOG(level, ...) log_log(level, __FILE__, __LINE__, __VA_ARGS__)
     #endif
 
     // Allow custom memory allocators
@@ -200,7 +201,7 @@ typedef struct tagBITMAPINFOHEADER {
         #define RL_REALLOC(ptr,sz)      realloc(ptr,sz)
     #endif
     #ifndef RL_FREE
-        #define RL_FREE(ptr)            free(ptr)
+        #define RL_FREE(ptr)            if (ptr != NULL) { free(ptr); ptr = NULL; }
     #endif
 #endif
 
@@ -305,16 +306,17 @@ typedef struct tagBITMAPINFOHEADER {
 #if defined(RAUDIO_STANDALONE)
 // Trace log level
 // NOTE: Organized by priority level
-typedef enum {
-    LOG_ALL = 0,        // Display all logs
-    LOG_TRACE,          // Trace logging, intended for internal use only
-    LOG_DEBUG,          // Debug logging, used for internal debugging, it should be disabled on release builds
-    LOG_INFO,           // Info logging, used for program execution info
-    LOG_WARNING,        // Warning logging, used on recoverable failures
-    LOG_ERROR,          // Error logging, used on unrecoverable failures
-    LOG_FATAL,          // Fatal logging, used to abort program: exit(EXIT_FAILURE)
-    LOG_NONE            // Disable logging
-} TraceLogLevel;
+//typedef enum {
+//    LOG_ALL = 0,        // Display all logs
+//    LOG_TRACE,          // Trace logging, intended for internal use only
+//    LOG_DEBUG,          // Debug logging, used for internal debugging, it should be disabled on release builds
+//    LOG_INFO,           // Info logging, used for program execution info
+//    LOG_WARNING,        // Warning logging, used on recoverable failures
+//    LOG_ERROR,          // Error logging, used on unrecoverable failures
+//    LOG_FATAL,          // Fatal logging, used to abort program: exit(EXIT_FAILURE)
+//    LOG_NONE            // Disable logging
+//} TraceLogLevel;
+# define LOG_WARNING LOG_WARN
 #endif
 
 // Music context type
@@ -442,20 +444,70 @@ void SetAudioBufferPan(AudioBuffer *buffer, float pan);
 void TrackAudioBuffer(AudioBuffer *buffer);
 void UntrackAudioBuffer(AudioBuffer *buffer, bool freeSampleData);
 
+// 日志文件
+FILE *fpLogFile = NULL;
+
+// miniaudio日志对象
+ma_log maLog;
+
+// 打开日志文件
+void OpenLogFile(const char * log, int logLevel)
+{
+    if (NULL != log && 0 != log[0])
+    {
+        fpLogFile = fopen(log, "a");
+        if (fpLogFile != NULL)
+            log_add_fp(fpLogFile, logLevel);
+    }
+}
+
+// 关闭日志文件
+void CloseLogFile()
+{
+    if (NULL != fpLogFile)
+    {
+        while (maLog.callbackCount > 0)
+            ma_log_unregister_callback(&maLog, maLog.callbacks[0]);
+
+        ma_log_uninit(&maLog);
+
+        // 已经打开则先关闭日志文件
+        log_remove_all_callback();
+        fflush(fpLogFile);
+        fclose(fpLogFile);
+    }
+}
+
 //----------------------------------------------------------------------------------
 // Module Functions Definition - Audio Device initialization and Closing
 //----------------------------------------------------------------------------------
 // Initialize audio device
-void InitAudioDevice(void)
+void InitAudioDevice(const char * log, int logLevel)
 {
+    // 设置日志
+    log_set_level(logLevel);
+
+    // 如果日志已经打开了，则先关闭日志文件
+    CloseLogFile();
+
+    // 打开日志文件
+    OpenLogFile(log, logLevel);
+
+    // 初始化miniaudio日志对象
+    ma_log_init(NULL, &maLog);
+
+    // 注册日志回调
+    ma_log_register_callback(&maLog, ma_log_callback_init(OnLog, NULL));
+
     // Init audio context
     ma_context_config ctxConfig = ma_context_config_init();
-    ma_log_callback_init(OnLog, NULL);
+    ctxConfig.pLog = &maLog;
 
     ma_result result = ma_context_init(NULL, 0, &ctxConfig, &AUDIO.System.context);
     if (result != MA_SUCCESS)
     {
         TRACELOG(LOG_WARNING, "AUDIO: Failed to initialize context");
+        CloseLogFile();
         return;
     }
 
@@ -477,6 +529,7 @@ void InitAudioDevice(void)
     {
         TRACELOG(LOG_WARNING, "AUDIO: Failed to initialize playback device");
         ma_context_uninit(&AUDIO.System.context);
+        CloseLogFile();
         return;
     }
 
@@ -487,6 +540,7 @@ void InitAudioDevice(void)
         TRACELOG(LOG_WARNING, "AUDIO: Failed to create mutex for mixing");
         ma_device_uninit(&AUDIO.System.device);
         ma_context_uninit(&AUDIO.System.context);
+        CloseLogFile();
         return;
     }
 
@@ -498,6 +552,7 @@ void InitAudioDevice(void)
         TRACELOG(LOG_WARNING, "AUDIO: Failed to start playback device");
         ma_device_uninit(&AUDIO.System.device);
         ma_context_uninit(&AUDIO.System.context);
+        CloseLogFile();
         return;
     }
 
@@ -528,6 +583,9 @@ void CloseAudioDevice(void)
         TRACELOG(LOG_INFO, "AUDIO: Device closed successfully");
     }
     else TRACELOG(LOG_WARNING, "AUDIO: Device could not be closed, not currently initialized");
+
+    // 关闭日志文件
+    CloseLogFile();
 }
 
 // Check if device has been initialized successfully
@@ -561,11 +619,20 @@ AudioBuffer *LoadAudioBuffer(ma_format format, ma_uint32 channels, ma_uint32 sam
 
     if (audioBuffer == NULL)
     {
-        TRACELOG(LOG_WARNING, "AUDIO: Failed to allocate memory for buffer");
+        TRACELOG(LOG_ERROR, "AUDIO: Failed to allocate memory for buffer");
         return NULL;
     }
 
-    if (sizeInFrames > 0) audioBuffer->data = RL_CALLOC(sizeInFrames*channels*ma_get_bytes_per_sample(format), 1);
+    if (sizeInFrames > 0)
+    {
+        audioBuffer->data = RL_CALLOC(sizeInFrames*channels*ma_get_bytes_per_sample(format), 1);
+        if (audioBuffer->data == NULL)
+        {
+            TRACELOG(LOG_ERROR, "AUDIO: Failed to allocate memory for audioBuffer->data");
+            RL_FREE(audioBuffer);
+            return NULL;
+        }
+    }
 
     // Audio data runs through a format converter
     ma_data_converter_config converterConfig = ma_data_converter_config_init(format, AUDIO_DEVICE_FORMAT, channels, AUDIO_DEVICE_CHANNELS, sampleRate, AUDIO.System.device.sampleRate);
@@ -575,7 +642,8 @@ AudioBuffer *LoadAudioBuffer(ma_format format, ma_uint32 channels, ma_uint32 sam
 
     if (result != MA_SUCCESS)
     {
-        TRACELOG(LOG_WARNING, "AUDIO: Failed to create data conversion pipeline");
+        TRACELOG(LOG_ERROR, "AUDIO: Failed to create data conversion pipeline");
+        RL_FREE(audioBuffer->data);
         RL_FREE(audioBuffer);
         return NULL;
     }
@@ -619,6 +687,26 @@ bool IsAudioBufferPlaying(AudioBuffer *buffer)
     bool result = false;
 
     if (buffer != NULL) result = (buffer->playing && !buffer->paused);
+
+    return result;
+}
+
+// Check if an audio buffer has stopped playing(扩展)
+bool IsAudioBufferStopPlaying(AudioBuffer *buffer)
+{
+    bool result = false;
+
+    if (buffer != NULL) result = !buffer->playing;
+
+    return result;
+}
+
+// Check if an audio buffer is paused(扩展)
+bool IsAudioBufferPaused(AudioBuffer *buffer)
+{
+    bool result = false;
+
+    if (buffer != NULL) result = buffer->paused;
 
     return result;
 }
@@ -731,7 +819,7 @@ void UntrackAudioBuffer(AudioBuffer *buffer, bool freeSampleData)
             buffer->prev = NULL;
             buffer->next = NULL;
 
-            if (freeSampleData && NULL != buffer->data)
+            if (freeSampleData)
                 RL_FREE(buffer->data);
 
             RL_FREE(buffer);
@@ -781,6 +869,13 @@ Wave LoadWaveFromMemory(const char *fileType, const unsigned char *fileData, int
             wave.sampleSize = 16;
             wave.channels = wav.channels;
             wave.data = (short *)RL_MALLOC(wave.frameCount*wave.channels*sizeof(short));
+            if (wave.data == NULL)
+            {
+                TRACELOG(LOG_ERROR, "WAVE: Failed to malloc WAV data");
+                memset(&wave, 0, sizeof(Wave));
+                drwav_uninit(&wav);
+                return wave;
+            }
 
             // NOTE: We are forcing conversion to 16bit sample size on reading
             drwav_read_pcm_frames_s16(&wav, wav.totalPCMFrameCount, wave.data);
@@ -804,6 +899,13 @@ Wave LoadWaveFromMemory(const char *fileType, const unsigned char *fileData, int
             wave.channels = info.channels;
             wave.frameCount = (unsigned int)stb_vorbis_stream_length_in_samples(oggData);  // NOTE: It returns frames!
             wave.data = (short *)RL_MALLOC(wave.frameCount*wave.channels*sizeof(short));
+            if (wave.data == NULL)
+            {
+                TRACELOG(LOG_ERROR, "WAVE: Failed to malloc OGG data");
+                memset(&wave, 0, sizeof(Wave));
+                stb_vorbis_close(oggData);
+                return wave;
+            }
 
             // NOTE: Get the number of samples to process (be careful! we ask for number of shorts, not bytes!)
             stb_vorbis_get_samples_short_interleaved(oggData, info.channels, (short *)wave.data, wave.frameCount*wave.channels);
@@ -1082,6 +1184,12 @@ bool ExportWaveAsCode(Wave wave, const char *fileName)
     // NOTE: Text data buffer size is estimated considering wave data size in bytes
     // and requiring 6 char bytes for every byte: "0x00, "
     char *txtData = (char *)RL_CALLOC(waveDataSize*6 + 2000, sizeof(char));
+    if (txtData == NULL)
+    {
+        TRACELOG(LOG_ERROR,   "FILEIO: Failed to allocate txtData");
+        TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to export wave as code", fileName);
+        return success;
+    }
 
     int byteCount = 0;
     byteCount += sprintf(txtData + byteCount, "\n//////////////////////////////////////////////////////////////////////////////////\n");
@@ -1135,7 +1243,7 @@ bool ExportWaveAsCode(Wave wave, const char *fileName)
 }
 
 // Play a sound
-void PlaySound(Sound sound)
+void PlaySoundEx(Sound sound)
 {
     PlayAudioBuffer(sound.stream.buffer);
 }
@@ -1162,6 +1270,18 @@ void StopSound(Sound sound)
 bool IsSoundPlaying(Sound sound)
 {
     return IsAudioBufferPlaying(sound.stream.buffer);
+}
+
+// Check if a sound has stopped playing(扩展)
+bool IsSoundStopPlaying(Sound sound)
+{
+    return IsAudioBufferStopPlaying(sound.stream.buffer);
+}
+
+// Check if a sound is paused(扩展)
+bool IsSoundPaused(Sound sound)
+{
+    return IsAudioBufferPaused(sound.stream.buffer);
 }
 
 // Set volume for a sound
@@ -1198,6 +1318,11 @@ void WaveFormat(Wave *wave, int sampleRate, int sampleSize, int channels)
     }
 
     void *data = RL_MALLOC(frameCount*channels*(sampleSize/8));
+    if (data == NULL)
+    {
+        TRACELOG(LOG_ERROR, "WAVE: Failed to malloc WAV data");
+        return;
+    }
 
     frameCount = (ma_uint32)ma_convert_frames(data, frameCount, formatOut, channels, sampleRate, wave->data, frameCountIn, formatIn, wave->channels, wave->sampleRate);
     if (frameCount == 0)
@@ -1232,6 +1357,10 @@ Wave WaveCopy(Wave wave)
         newWave.sampleSize = wave.sampleSize;
         newWave.channels = wave.channels;
     }
+    else
+    {
+        TRACELOG(LOG_ERROR, "WAVE: Failed to malloc WAV data");
+    }
 
     return newWave;
 }
@@ -1245,6 +1374,11 @@ void WaveCrop(Wave *wave, int initSample, int finalSample)
         int sampleCount = finalSample - initSample;
 
         void *data = RL_MALLOC(sampleCount*wave->sampleSize/8);
+        if (data == NULL)
+        {
+            TRACELOG(LOG_ERROR, "WAVE: Failed to malloc WAV data");
+            return;
+        }
 
         memcpy(data, (unsigned char *)wave->data + (initSample*wave->channels*wave->sampleSize/8), sampleCount*wave->sampleSize/8);
 
@@ -1260,6 +1394,11 @@ void WaveCrop(Wave *wave, int initSample, int finalSample)
 float *LoadWaveSamples(Wave wave)
 {
     float *samples = (float *)RL_MALLOC(wave.frameCount*wave.channels*sizeof(float));
+    if (samples == NULL)
+    {
+        TRACELOG(LOG_ERROR, "WAVE: Failed to malloc samples");
+        return NULL;
+    }
 
     // NOTE: sampleCount is the total number of interlaced samples (including channels)
 
@@ -1294,10 +1433,15 @@ Music LoadMusicStream(const char *fileName)
     else if (IsFileExtension(fileName, ".wav"))
     {
         drwav *ctxWav = RL_CALLOC(1, sizeof(drwav));
-        bool success = drwav_init_file(ctxWav, fileName, NULL);
-
-        music.ctxType = MUSIC_AUDIO_WAV;
-        music.ctxData = ctxWav;
+        bool success = false;
+        if (ctxWav != NULL)
+        {
+            success = drwav_init_file(ctxWav, fileName, NULL);
+            music.ctxType = MUSIC_AUDIO_WAV;
+            music.ctxData = ctxWav;
+        }
+        else
+            TRACELOG(LOG_ERROR, "STREAM: Failed to allocate ctxWav");
 
         if (success)
         {
@@ -1336,10 +1480,15 @@ Music LoadMusicStream(const char *fileName)
     else if (IsFileExtension(fileName, ".mp3"))
     {
         drmp3 *ctxMp3 = RL_CALLOC(1, sizeof(drmp3));
-        int result = drmp3_init_file(ctxMp3, fileName, NULL);
-
-        music.ctxType = MUSIC_AUDIO_MP3;
-        music.ctxData = ctxMp3;
+        int result = 0;
+        if (ctxMp3 != NULL)
+        {
+            result = drmp3_init_file(ctxMp3, fileName, NULL);
+            music.ctxType = MUSIC_AUDIO_MP3;
+            music.ctxData = ctxMp3;
+        }
+        else
+            TRACELOG(LOG_ERROR, "STREAM: Failed to allocate ctxMp3");
 
         if (result > 0)
         {
@@ -1415,11 +1564,16 @@ Music LoadMusicStream(const char *fileName)
     else if (IsFileExtension(fileName, ".mod"))
     {
         jar_mod_context_t *ctxMod = RL_CALLOC(1, sizeof(jar_mod_context_t));
-        jar_mod_init(ctxMod);
-        int result = jar_mod_load_file(ctxMod, fileName);
-
-        music.ctxType = MUSIC_MODULE_MOD;
-        music.ctxData = ctxMod;
+        int result = 0;
+        if (ctxMod != NULL)
+        {
+            jar_mod_init(ctxMod);
+            result = jar_mod_load_file(ctxMod, fileName);
+            music.ctxType = MUSIC_MODULE_MOD;
+            music.ctxData = ctxMod;
+        }
+        else
+            TRACELOG(LOG_ERROR, "STREAM: Failed to allocate ctxMod");
 
         if (result > 0)
         {
@@ -1486,11 +1640,15 @@ Music LoadMusicStreamFromMemory(const char *fileType, const unsigned char *data,
     else if ((strcmp(fileType, ".wav") == 0) || (strcmp(fileType, ".WAV") == 0))
     {
         drwav *ctxWav = RL_CALLOC(1, sizeof(drwav));
-
-        bool success = drwav_init_memory(ctxWav, (const void *)data, dataSize, NULL);
-
-        music.ctxType = MUSIC_AUDIO_WAV;
-        music.ctxData = ctxWav;
+        bool success = false;
+        if (ctxWav != NULL)
+        {
+            success = drwav_init_memory(ctxWav, (const void *)data, dataSize, NULL);
+            music.ctxType = MUSIC_AUDIO_WAV;
+            music.ctxData = ctxWav;
+        }
+        else
+            TRACELOG(LOG_ERROR, "STREAM: Failed to allocate ctxWav");
 
         if (success)
         {
@@ -1530,10 +1688,15 @@ Music LoadMusicStreamFromMemory(const char *fileType, const unsigned char *data,
     else if ((strcmp(fileType, ".mp3") == 0) || (strcmp(fileType, ".MP3") == 0))
     {
         drmp3 *ctxMp3 = RL_CALLOC(1, sizeof(drmp3));
-        int success = drmp3_init_memory(ctxMp3, (const void*)data, dataSize, NULL);
-
-        music.ctxType = MUSIC_AUDIO_MP3;
-        music.ctxData = ctxMp3;
+        int success = 0;
+        if (ctxMp3 != NULL)
+        {
+            success = drmp3_init_memory(ctxMp3, (const void*)data, dataSize, NULL);
+            music.ctxType = MUSIC_AUDIO_MP3;
+            music.ctxData = ctxMp3;
+        }
+        else
+            TRACELOG(LOG_ERROR, "STREAM: Failed to allocate ctxMp3");
 
         if (success)
         {
@@ -1610,19 +1773,33 @@ Music LoadMusicStreamFromMemory(const char *fileType, const unsigned char *data,
         jar_mod_context_t *ctxMod = (jar_mod_context_t *)RL_MALLOC(sizeof(jar_mod_context_t));
         int result = 0;
 
-        jar_mod_init(ctxMod);
-
-        // Copy data to allocated memory for default UnloadMusicStream
-        unsigned char *newData = (unsigned char *)RL_MALLOC(dataSize);
-        int it = dataSize/sizeof(unsigned char);
-        for (int i = 0; i < it; i++) newData[i] = data[i];
-
-        // Memory loaded version for jar_mod_load_file()
-        if (dataSize && (dataSize < 32*1024*1024))
+        if (ctxMod != NULL)
         {
-            ctxMod->modfilesize = dataSize;
-            ctxMod->modfile = newData;
-            if (jar_mod_load(ctxMod, (void *)ctxMod->modfile, dataSize)) result = dataSize;
+            jar_mod_init(ctxMod);
+
+            // Copy data to allocated memory for default UnloadMusicStream
+            unsigned char *newData = (unsigned char *)RL_MALLOC(dataSize);
+            if (newData != NULL)
+            {
+                int it = dataSize / sizeof(unsigned char);
+                for (int i = 0; i < it; i++) newData[i] = data[i];
+
+                // Memory loaded version for jar_mod_load_file()
+                if (dataSize && (dataSize < 32 * 1024 * 1024))
+                {
+                    ctxMod->modfilesize = dataSize;
+                    ctxMod->modfile = newData;
+                    if (jar_mod_load(ctxMod, (void *)ctxMod->modfile, dataSize)) result = dataSize;
+                }
+            }
+            else
+            {
+                TRACELOG(LOG_ERROR, "STREAM: Failed to malloc newData");
+            }
+        }
+        else
+        {
+            TRACELOG(LOG_ERROR, "STREAM: Failed to malloc ctxMod");
         }
 
         if (result > 0)
@@ -1757,6 +1934,12 @@ void StopMusicStream(Music music)
 {
     StopAudioStream(music.stream);
 
+    if (music.ctxData == NULL)
+    {
+        TRACELOG(LOG_ERROR, "STREAM: Audio context data is NULL");
+        return;
+    } 
+
     switch (music.ctxType)
     {
 #if defined(SUPPORT_FILEFORMAT_WAV)
@@ -1825,7 +2008,13 @@ void SeekMusicStream(Music music, float position)
 // Update (re-fill) music buffers if data already processed
 void UpdateMusicStream(Music music)
 {
-    if (music.stream.buffer == NULL) return;
+    ma_mutex_lock(&AUDIO.System.lock);
+
+    if (music.stream.buffer == NULL)
+    {
+        ma_mutex_unlock(&AUDIO.System.lock);
+        return;
+    }
 
     unsigned int subBufferSizeInFrames = music.stream.buffer->sizeInFrames/2;
 
@@ -1837,6 +2026,9 @@ void UpdateMusicStream(Music music)
     {
         RL_FREE(AUDIO.System.pcmBuffer);
         AUDIO.System.pcmBuffer = RL_CALLOC(1, pcmSize);
+        if (AUDIO.System.pcmBuffer == NULL)
+            TRACELOG(LOG_ERROR, "STREAM: Failed to allocate pcmBuffer");
+
         AUDIO.System.pcmBufferSize = pcmSize;
     }
 
@@ -1972,6 +2164,7 @@ void UpdateMusicStream(Music music)
             {
                 // Streaming is ending, we filled latest frames from input
                 StopMusicStream(music);
+                ma_mutex_unlock(&AUDIO.System.lock);
                 return;
             }
         }
@@ -1980,12 +2173,26 @@ void UpdateMusicStream(Music music)
     // NOTE: In case window is minimized, music stream is stopped,
     // just make sure to play again on window restore
     if (IsMusicStreamPlaying(music)) PlayMusicStream(music);
+
+    ma_mutex_unlock(&AUDIO.System.lock);
 }
 
 // Check if any music is playing
 bool IsMusicStreamPlaying(Music music)
 {
     return IsAudioStreamPlaying(music.stream);
+}
+
+// Check if music has stopped playing(扩展)
+bool IsMusicStreamStopPlaying(Music music)
+{
+    return IsAudioStreamStopPlaying(music.stream);
+}
+
+// Check if music is paused(扩展)
+bool IsMusicStreamPaused(Music music)
+{
+    return IsAudioStreamPaused(music.stream);
 }
 
 // Set volume for music
@@ -2181,6 +2388,18 @@ bool IsAudioStreamPlaying(AudioStream stream)
     return IsAudioBufferPlaying(stream.buffer);
 }
 
+// Check if audio stream has stopped playing(扩展)
+bool IsAudioStreamStopPlaying(AudioStream stream)
+{
+    return IsAudioBufferStopPlaying(stream.buffer);
+}
+
+// Check if audio stream is paused(扩展)
+bool IsAudioStreamPaused(AudioStream stream)
+{
+    return IsAudioBufferPaused(stream.buffer);
+}
+
 // Stop audio stream
 void StopAudioStream(AudioStream stream)
 {
@@ -2225,6 +2444,13 @@ void AttachAudioStreamProcessor(AudioStream stream, AudioCallback process)
     ma_mutex_lock(&AUDIO.System.lock);
 
     rAudioProcessor *processor = (rAudioProcessor *)RL_CALLOC(1, sizeof(rAudioProcessor));
+    if (processor == NULL)
+    {
+        TRACELOG(LOG_ERROR, "AUDIO: Failed to allocate processor");
+        ma_mutex_unlock(&AUDIO.System.lock);
+        return;
+    }
+
     processor->process = process;
 
     rAudioProcessor *last = stream.buffer->processor;
@@ -2278,6 +2504,13 @@ void AttachAudioMixedProcessor(AudioCallback process)
     ma_mutex_lock(&AUDIO.System.lock);
 
     rAudioProcessor *processor = (rAudioProcessor *)RL_CALLOC(1, sizeof(rAudioProcessor));
+    if (processor == NULL)
+    {
+        TRACELOG(LOG_ERROR, "AUDIO: Failed to allocate processor");
+        ma_mutex_unlock(&AUDIO.System.lock);
+        return;
+    }
+
     processor->process = process;
 
     rAudioProcessor *last = AUDIO.mixedProcessor;
@@ -2331,7 +2564,41 @@ void DetachAudioMixedProcessor(AudioCallback process)
 // Log callback function
 static void OnLog(void *pUserData, ma_uint32 level, const char *pMessage)
 {
-    TRACELOG(LOG_WARNING, "miniaudio: %s", pMessage);   // All log messages from miniaudio are errors
+    // 输出日志级别和消息
+    int nLevel = 0;
+    switch (level)
+    {
+    case MA_LOG_LEVEL_DEBUG:
+        nLevel = LOG_DEBUG;
+        break;
+    case MA_LOG_LEVEL_INFO:
+        nLevel = LOG_INFO;
+        break;
+    case MA_LOG_LEVEL_WARNING:
+        nLevel = LOG_WARN;
+        break;
+    case MA_LOG_LEVEL_ERROR:
+        nLevel = LOG_ERROR;
+        break;
+    default:
+        nLevel = LOG_INFO;
+        break;
+    }
+
+    // 去除结尾的换行符
+    char messageCopy[4096];
+    strncpy(messageCopy, pMessage, sizeof(messageCopy) - 1);
+    messageCopy[sizeof(messageCopy) - 1] = '\0';
+
+    // 移除末尾的换行符和回车符
+    size_t len = strlen(messageCopy);
+    while (len > 0 && (messageCopy[len - 1] == '\n' || messageCopy[len - 1] == '\r'))
+    {
+        messageCopy[len - 1] = '\0';
+        len--;
+    }
+
+    TRACELOG(nLevel, "miniaudio: %s", messageCopy);
 }
 
 // Reads audio data from an AudioBuffer object in internal format.
@@ -2708,6 +2975,12 @@ static unsigned char *LoadFileData(const char *fileName, int *dataSize)
             if (size > 0)
             {
                 data = (unsigned char *)RL_MALLOC(size*sizeof(unsigned char));
+                if (data == NULL)
+                {
+                    TRACELOG(LOG_ERROR, "File: Failed to malloc file data");
+                    fclose(file);
+                    return NULL;
+                }
 
                 // NOTE: fread() returns number of read elements instead of bytes, so we read [1 byte, size elements]
                 unsigned int count = (unsigned int)fread(data, sizeof(unsigned char), size, file);
