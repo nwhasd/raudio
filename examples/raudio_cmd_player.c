@@ -132,7 +132,7 @@ static void PlayWaveCLI(Wave wave)
 {
     float waveTimeMs = (float)wave.frameCount*1000.0/(wave.sampleRate*wave.channels);
 
-    InitAudioDevice();                  // Init audio device
+    InitAudioDevice("", 0);                  // Init audio device
     Sound fx = LoadSoundFromWave(wave); // Load audio wave
 
     printf("\n//////////////////////////////////////////////////////////////////////////////////\n");

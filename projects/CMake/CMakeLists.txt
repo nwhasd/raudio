@@ -29,6 +29,7 @@ option(SUPPORT_FILEFORMAT_MOD "MOD Support" TRUE)
 # raudio
 add_library(raudio STATIC
     ${RAUDIO_SRC}/raudio.c
+    ${RAUDIO_SRC}/external/log.c
 )
 
 # Includes
@@ -36,6 +37,7 @@ target_include_directories(raudio INTERFACE ${RAUDIO_SRC})
 
 # Defines
 target_compile_definitions(raudio PUBLIC
+    _CRT_SECURE_NO_WARNINGS
     RAUDIO_STANDALONE
     SUPPORT_MODULE_RAUDIO
 )

@@ -78,7 +78,7 @@ int main(int argc, char *argv[])
     //--------------------------------------------------------------------------------------
     static unsigned char key = 0;
 
-    InitAudioDevice();
+    InitAudioDevice("", 0);
 
     Sound fxWav = LoadSound("resources/weird.wav");       // Load WAV audio file
     Sound fxOgg = LoadSound("resources/target.ogg");      // Load OGG audio file
