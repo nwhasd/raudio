@@ -23203,7 +23203,13 @@ static ma_result ma_context_get_IAudioClient_Desktop__wasapi(ma_context* pContex
         return result;
     }
 
-    hr = ma_IMMDevice_Activate(*ppMMDevice, &MA_IID_IAudioClient, CLSCTX_ALL, pActivationParams, (void**)ppAudioClient);
+    HRESULT CoInitializeResult = ma_CoInitializeEx(pContext, NULL, MA_COINIT_VALUE);
+    {
+        hr = ma_IMMDevice_Activate(*ppMMDevice, &MA_IID_IAudioClient, CLSCTX_ALL, pActivationParams, (void**)ppAudioClient);
+    }
+    if (CoInitializeResult == S_OK || CoInitializeResult == S_FALSE)
+        ma_CoUninitialize(pContext);
+
     if (FAILED(hr)) {
         return ma_result_from_HRESULT(hr);
     }

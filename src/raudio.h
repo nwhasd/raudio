@@ -70,7 +70,7 @@
     #define RL_CALLOC(n,sz)     calloc(n,sz)
 #endif
 #ifndef RL_FREE
-    #define RL_FREE(p)          free(p)
+    #define RL_FREE(p)          if (p != NULL) { free(p); p = NULL; }
 #endif
 
 //----------------------------------------------------------------------------------
@@ -138,7 +138,7 @@ extern "C" {            // Prevents name mangling of functions
 #endif
 
 // Audio device management functions
-void InitAudioDevice(void);                                     // Initialize audio device and context
+void InitAudioDevice(const char * log, int logLevel);           // Initialize audio device and context
 void CloseAudioDevice(void);                                    // Close the audio device and context
 bool IsAudioDeviceReady(void);                                  // Check if audio device has been initialized successfully
 void SetMasterVolume(float volume);                             // Set master volume (listener)
@@ -160,11 +160,13 @@ bool ExportWave(Wave wave, const char *fileName);               // Export wave d
 bool ExportWaveAsCode(Wave wave, const char *fileName);         // Export wave sample data to code (.h), returns true on success
 
 // Wave/Sound management functions
-void PlaySound(Sound sound);                                    // Play a sound
+void PlaySoundEx(Sound sound);                                  // Play a sound(改名)
 void StopSound(Sound sound);                                    // Stop playing a sound
 void PauseSound(Sound sound);                                   // Pause a sound
 void ResumeSound(Sound sound);                                  // Resume a paused sound
 bool IsSoundPlaying(Sound sound);                               // Check if a sound is currently playing
+bool IsSoundStopPlaying(Sound sound);                           // Check if a sound has stopped playing(扩展)
+bool IsSoundPaused(Sound sound);                                // Check if a sound is paused(扩展)
 void SetSoundVolume(Sound sound, float volume);                 // Set volume for a sound (1.0 is max level)
 void SetSoundPitch(Sound sound, float pitch);                   // Set pitch for a sound (1.0 is base level)
 void SetSoundPan(Sound sound, float pan);                       // Set pan for a sound (0.0 to 1.0, 0.5=center)
@@ -181,6 +183,8 @@ bool IsMusicReady(Music music);                                 // Checks if a m
 void UnloadMusicStream(Music music);                            // Unload music stream
 void PlayMusicStream(Music music);                              // Start music playing
 bool IsMusicStreamPlaying(Music music);                         // Check if music is playing
+bool IsMusicStreamStopPlaying(Music music);                     // Check if music has stopped playing(扩展)
+bool IsMusicStreamPaused(Music music);                          // Check if music is paused(扩展)
 void UpdateMusicStream(Music music);                            // Updates buffers for music streaming
 void StopMusicStream(Music music);                              // Stop music playing
 void PauseMusicStream(Music music);                             // Pause music playing
@@ -202,6 +206,8 @@ void PlayAudioStream(AudioStream stream);                       // Play audio st
 void PauseAudioStream(AudioStream stream);                      // Pause audio stream
 void ResumeAudioStream(AudioStream stream);                     // Resume audio stream
 bool IsAudioStreamPlaying(AudioStream stream);                  // Check if audio stream is playing
+bool IsAudioStreamStopPlaying(AudioStream stream);              // Check if audio stream has stopped playing(扩展)
+bool IsAudioStreamPaused(AudioStream stream);                   // Check if audio stream is paused(扩展)
 void StopAudioStream(AudioStream stream);                       // Stop audio stream
 void SetAudioStreamVolume(AudioStream stream, float volume);    // Set volume for audio stream (1.0 is max level)
 void SetAudioStreamPitch(AudioStream stream, float pitch);      // Set pitch for audio stream (1.0 is base level)

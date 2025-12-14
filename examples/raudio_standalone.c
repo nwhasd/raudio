@@ -78,7 +78,7 @@ int main(int argc, char *argv[])
     //--------------------------------------------------------------------------------------
     static unsigned char key = 0;
 
-    InitAudioDevice();
+    InitAudioDevice("", 0);
 
     Sound fxWav = LoadSound("resources/weird.wav");       // Load WAV audio file
     Sound fxOgg = LoadSound("resources/target.ogg");      // Load OGG audio file
@@ -94,8 +94,8 @@ int main(int argc, char *argv[])
     {
         if (kbhit()) key = getch();
 
-        if ((key == 's') || (key == 'S')) PlaySound(fxWav);
-        if ((key == 'd') || (key == 'D')) PlaySound(fxOgg);
+        if ((key == 's') || (key == 'S')) PlaySoundEx(fxWav);
+        if ((key == 'd') || (key == 'D')) PlaySoundEx(fxOgg);
 
         key = 0;
 
