@@ -7901,6 +7901,7 @@ struct ma_device
             ma_wasapi_usage usage;
             void* hAvrtHandle;
             ma_mutex rerouteLock;
+            ma_mutex IMMNotifyLock;
         } wasapi;
 #endif
 #ifdef MA_SUPPORT_DSOUND
@@ -22297,38 +22298,61 @@ static void ma_completion_handler_uwp_wait(ma_completion_handler_uwp* pHandler)
 #if defined(MA_WIN32_DESKTOP) || defined(MA_WIN32_GDK)
 static HRESULT STDMETHODCALLTYPE ma_IMMNotificationClient_QueryInterface(ma_IMMNotificationClient* pThis, const IID* const riid, void** ppObject)
 {
+    if (pThis == NULL)
+        return S_FALSE;
+
+    ma_mutex_lock(&pThis->pDevice->wasapi.IMMNotifyLock);
     /*
     We care about two interfaces - IUnknown and IMMNotificationClient. If the requested IID is something else
     we just return E_NOINTERFACE. Otherwise we need to increment the reference counter and return S_OK.
     */
     if (!ma_is_guid_equal(riid, &MA_IID_IUnknown) && !ma_is_guid_equal(riid, &MA_IID_IMMNotificationClient)) {
         *ppObject = NULL;
+        ma_mutex_unlock(&pThis->pDevice->wasapi.IMMNotifyLock);
         return E_NOINTERFACE;
     }
 
     /* Getting here means the IID is IUnknown or IMMNotificationClient. */
     *ppObject = (void*)pThis;
     ((ma_IMMNotificationClientVtbl*)pThis->lpVtbl)->AddRef(pThis);
+    ma_mutex_unlock(&pThis->pDevice->wasapi.IMMNotifyLock);
     return S_OK;
 }
 
 static ULONG STDMETHODCALLTYPE ma_IMMNotificationClient_AddRef(ma_IMMNotificationClient* pThis)
 {
-    return (ULONG)ma_atomic_fetch_add_32(&pThis->counter, 1) + 1;
+    if (pThis == NULL)
+        return 0;
+
+    ma_mutex_lock(&pThis->pDevice->wasapi.IMMNotifyLock);
+    ULONG nCounter = (ULONG)ma_atomic_fetch_add_32(&pThis->counter, 1) + 1;
+    ma_mutex_unlock(&pThis->pDevice->wasapi.IMMNotifyLock);
+    return nCounter;
 }
 
 static ULONG STDMETHODCALLTYPE ma_IMMNotificationClient_Release(ma_IMMNotificationClient* pThis)
 {
+    if (pThis == NULL)
+        return 0;
+
+    ma_mutex_lock(&pThis->pDevice->wasapi.IMMNotifyLock);
     ma_uint32 newRefCount = ma_atomic_fetch_sub_32(&pThis->counter, 1) - 1;
     if (newRefCount == 0) {
+        ma_mutex_unlock(&pThis->pDevice->wasapi.IMMNotifyLock);
         return 0;   /* We don't free anything here because we never allocate the object on the heap. */
     }
 
+    ma_mutex_unlock(&pThis->pDevice->wasapi.IMMNotifyLock);
     return (ULONG)newRefCount;
 }
 
 static HRESULT STDMETHODCALLTYPE ma_IMMNotificationClient_OnDeviceStateChanged(ma_IMMNotificationClient* pThis, const WCHAR* pDeviceID, DWORD dwNewState)
 {
+    if (pThis == NULL)
+        return S_FALSE;
+
+    ma_mutex_lock(&pThis->pDevice->wasapi.IMMNotifyLock);
+
     ma_bool32 isThisDevice = MA_FALSE;
     ma_bool32 isCapture    = MA_FALSE;
     ma_bool32 isPlayback   = MA_FALSE;
@@ -22408,11 +22432,16 @@ static HRESULT STDMETHODCALLTYPE ma_IMMNotificationClient_OnDeviceStateChanged(m
         }
     }
 
+    ma_mutex_unlock(&pThis->pDevice->wasapi.IMMNotifyLock);
     return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE ma_IMMNotificationClient_OnDeviceAdded(ma_IMMNotificationClient* pThis, const WCHAR* pDeviceID)
 {
+    if (pThis == NULL)
+        return S_FALSE;
+
+    ma_mutex_lock(&pThis->pDevice->wasapi.IMMNotifyLock);
 #ifdef MA_DEBUG_OUTPUT
     /*ma_log_postf(ma_device_get_log(pThis->pDevice), MA_LOG_LEVEL_DEBUG, "IMMNotificationClient_OnDeviceAdded(pDeviceID=%S)\n", (pDeviceID != NULL) ? pDeviceID : L"(NULL)");*/
 #endif
@@ -22420,11 +22449,18 @@ static HRESULT STDMETHODCALLTYPE ma_IMMNotificationClient_OnDeviceAdded(ma_IMMNo
     /* We don't need to worry about this event for our purposes. */
     (void)pThis;
     (void)pDeviceID;
+
+    ma_mutex_unlock(&pThis->pDevice->wasapi.IMMNotifyLock);
     return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE ma_IMMNotificationClient_OnDeviceRemoved(ma_IMMNotificationClient* pThis, const WCHAR* pDeviceID)
 {
+    if (pThis == NULL)
+        return S_FALSE;
+
+    ma_mutex_lock(&pThis->pDevice->wasapi.IMMNotifyLock);
+
 #ifdef MA_DEBUG_OUTPUT
     /*ma_log_postf(ma_device_get_log(pThis->pDevice), MA_LOG_LEVEL_DEBUG, "IMMNotificationClient_OnDeviceRemoved(pDeviceID=%S)\n", (pDeviceID != NULL) ? pDeviceID : L"(NULL)");*/
 #endif
@@ -22432,11 +22468,18 @@ static HRESULT STDMETHODCALLTYPE ma_IMMNotificationClient_OnDeviceRemoved(ma_IMM
     /* We don't need to worry about this event for our purposes. */
     (void)pThis;
     (void)pDeviceID;
+
+    ma_mutex_unlock(&pThis->pDevice->wasapi.IMMNotifyLock);
     return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE ma_IMMNotificationClient_OnDefaultDeviceChanged(ma_IMMNotificationClient* pThis, ma_EDataFlow dataFlow, ma_ERole role, const WCHAR* pDefaultDeviceID)
 {
+    if (pThis == NULL)
+        return S_FALSE;
+
+    ma_mutex_lock(&pThis->pDevice->wasapi.IMMNotifyLock);
+
 #ifdef MA_DEBUG_OUTPUT
     /*ma_log_postf(ma_device_get_log(pThis->pDevice), MA_LOG_LEVEL_DEBUG, "IMMNotificationClient_OnDefaultDeviceChanged(dataFlow=%d, role=%d, pDefaultDeviceID=%S)\n", dataFlow, role, (pDefaultDeviceID != NULL) ? pDefaultDeviceID : L"(NULL)");*/
 #endif
@@ -22448,6 +22491,7 @@ static HRESULT STDMETHODCALLTYPE ma_IMMNotificationClient_OnDefaultDeviceChanged
         (pThis->pDevice->type == ma_device_type_capture  && dataFlow != ma_eCapture) ||
         (pThis->pDevice->type == ma_device_type_loopback && dataFlow != ma_eRender)) {
         ma_log_postf(ma_device_get_log(pThis->pDevice), MA_LOG_LEVEL_DEBUG, "[WASAPI] Stream rerouting abandoned because dataFlow does match device type.\n");
+        ma_mutex_unlock(&pThis->pDevice->wasapi.IMMNotifyLock);
         return S_OK;
     }
 
@@ -22460,6 +22504,7 @@ static HRESULT STDMETHODCALLTYPE ma_IMMNotificationClient_OnDefaultDeviceChanged
     if ((dataFlow == ma_eRender  && pThis->pDevice->wasapi.allowPlaybackAutoStreamRouting == MA_FALSE) ||
         (dataFlow == ma_eCapture && pThis->pDevice->wasapi.allowCaptureAutoStreamRouting  == MA_FALSE)) {
         ma_log_postf(ma_device_get_log(pThis->pDevice), MA_LOG_LEVEL_DEBUG, "[WASAPI] Stream rerouting abandoned because automatic stream routing has been disabled by the device config.\n");
+        ma_mutex_unlock(&pThis->pDevice->wasapi.IMMNotifyLock);
         return S_OK;
     }
 
@@ -22471,6 +22516,7 @@ static HRESULT STDMETHODCALLTYPE ma_IMMNotificationClient_OnDefaultDeviceChanged
     if ((dataFlow == ma_eRender  && pThis->pDevice->playback.shareMode == ma_share_mode_exclusive) ||
         (dataFlow == ma_eCapture && pThis->pDevice->capture.shareMode  == ma_share_mode_exclusive)) {
         ma_log_postf(ma_device_get_log(pThis->pDevice), MA_LOG_LEVEL_DEBUG, "[WASAPI] Stream rerouting abandoned because the device shared mode is exclusive.\n");
+        ma_mutex_unlock(&pThis->pDevice->wasapi.IMMNotifyLock);
         return S_OK;
     }
 
@@ -22487,6 +22533,7 @@ static HRESULT STDMETHODCALLTYPE ma_IMMNotificationClient_OnDefaultDeviceChanged
 
         if (previousState == ma_device_state_uninitialized || previousState == ma_device_state_starting) {
             ma_log_postf(ma_device_get_log(pThis->pDevice), MA_LOG_LEVEL_DEBUG, "[WASAPI] Stream rerouting abandoned because the device is in the process of starting.\n");
+            ma_mutex_unlock(&pThis->pDevice->wasapi.IMMNotifyLock);
             return S_OK;
         }
 
@@ -22535,11 +22582,17 @@ static HRESULT STDMETHODCALLTYPE ma_IMMNotificationClient_OnDefaultDeviceChanged
         }
     }
 
+    ma_mutex_unlock(&pThis->pDevice->wasapi.IMMNotifyLock);
     return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE ma_IMMNotificationClient_OnPropertyValueChanged(ma_IMMNotificationClient* pThis, const WCHAR* pDeviceID, const PROPERTYKEY key)
 {
+    if (pThis == NULL)
+        return S_FALSE;
+
+    ma_mutex_lock(&pThis->pDevice->wasapi.IMMNotifyLock);
+
 #ifdef MA_DEBUG_OUTPUT
     /*ma_log_postf(ma_device_get_log(pThis->pDevice), MA_LOG_LEVEL_DEBUG, "IMMNotificationClient_OnPropertyValueChanged(pDeviceID=%S)\n", (pDeviceID != NULL) ? pDeviceID : L"(NULL)");*/
 #endif
@@ -22547,6 +22600,8 @@ static HRESULT STDMETHODCALLTYPE ma_IMMNotificationClient_OnPropertyValueChanged
     (void)pThis;
     (void)pDeviceID;
     (void)key;
+
+    ma_mutex_unlock(&pThis->pDevice->wasapi.IMMNotifyLock);
     return S_OK;
 }
 
@@ -23516,6 +23571,7 @@ static ma_result ma_device_uninit__wasapi(ma_device* pDevice)
             ma_IMMDeviceEnumerator_Release((ma_IMMDeviceEnumerator*)pDevice->wasapi.pDeviceEnumerator);
         }
 
+        ma_mutex_uninit(&pDevice->wasapi.IMMNotifyLock);
         ma_mutex_uninit(&pDevice->wasapi.rerouteLock);
     }
     #endif
@@ -24397,6 +24453,7 @@ static ma_result ma_device_init__wasapi(ma_device* pDevice, const ma_device_conf
     }
 
     ma_mutex_init(&pDevice->wasapi.rerouteLock);
+    ma_mutex_init(&pDevice->wasapi.IMMNotifyLock);
 
     hr = ma_CoCreateInstance(pDevice->pContext, &MA_CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &MA_IID_IMMDeviceEnumerator, (void**)&pDeviceEnumerator);
     if (FAILED(hr)) {
@@ -24506,6 +24563,9 @@ static ma_result ma_device_reroute__wasapi(ma_device* pDevice, ma_device_type de
 
 static ma_result ma_device_start__wasapi_nolock(ma_device* pDevice)
 {
+    if (NULL == pDevice || NULL == pDevice->pContext)
+        return MA_ERROR;
+
     HRESULT hr;
 
     if (pDevice->pContext->wasapi.hAvrt) {
@@ -24517,9 +24577,12 @@ static ma_result ma_device_start__wasapi_nolock(ma_device* pDevice)
     }
 
     if (pDevice->type == ma_device_type_capture || pDevice->type == ma_device_type_duplex || pDevice->type == ma_device_type_loopback) {
+        if (NULL == (ma_IAudioClient*)pDevice->wasapi.pAudioClientCapture)
+            return MA_ERROR;
+
         hr = ma_IAudioClient_Start((ma_IAudioClient*)pDevice->wasapi.pAudioClientCapture);
         if (FAILED(hr)) {
-            ma_log_postf(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[WASAPI] Failed to start internal capture device. HRESULT = %d.", (int)hr);
+            ma_log_postf(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[WASAPI] Failed to start internal capture device. HRESULT = 0x%08X.", hr);
             return ma_result_from_HRESULT(hr);
         }
 
@@ -24527,9 +24590,12 @@ static ma_result ma_device_start__wasapi_nolock(ma_device* pDevice)
     }
 
     if (pDevice->type == ma_device_type_playback || pDevice->type == ma_device_type_duplex) {
+        if (NULL == (ma_IAudioClient*)pDevice->wasapi.pAudioClientPlayback)
+            return MA_ERROR;
+
         hr = ma_IAudioClient_Start((ma_IAudioClient*)pDevice->wasapi.pAudioClientPlayback);
         if (FAILED(hr)) {
-            ma_log_postf(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[WASAPI] Failed to start internal playback device. HRESULT = %d.", (int)hr);
+            ma_log_postf(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[WASAPI] Failed to start internal playback device. HRESULT = 0x%08X.", hr);
             return ma_result_from_HRESULT(hr);
         }
 
@@ -24544,6 +24610,8 @@ static ma_result ma_device_start__wasapi(ma_device* pDevice)
     ma_result result;
 
     MA_ASSERT(pDevice != NULL);
+    if (NULL == pDevice)
+        return MA_ERROR;
 
     /* Wait for any rerouting to finish before attempting to start the device. */
     ma_mutex_lock(&pDevice->wasapi.rerouteLock);
@@ -24561,6 +24629,8 @@ static ma_result ma_device_stop__wasapi_nolock(ma_device* pDevice)
     HRESULT hr;
 
     MA_ASSERT(pDevice != NULL);
+    if (NULL == pDevice)
+        return MA_ERROR;
 
     if (pDevice->wasapi.hAvrtHandle) {
         ((MA_PFN_AvRevertMmThreadCharacteristics)pDevice->pContext->wasapi.AvRevertMmThreadcharacteristics)((HANDLE)pDevice->wasapi.hAvrtHandle);
@@ -24675,6 +24745,8 @@ static ma_result ma_device_stop__wasapi(ma_device* pDevice)
     ma_result result;
 
     MA_ASSERT(pDevice != NULL);
+    if (NULL == pDevice)
+        return MA_ERROR;
 
     /* Wait for any rerouting to finish before attempting to stop the device. */
     ma_mutex_lock(&pDevice->wasapi.rerouteLock);
@@ -24693,6 +24765,9 @@ static ma_result ma_device_stop__wasapi(ma_device* pDevice)
 
 static ma_result ma_device_read__wasapi(ma_device* pDevice, void* pFrames, ma_uint32 frameCount, ma_uint32* pFramesRead)
 {
+    if (NULL == pDevice)
+        return MA_ERROR;
+
     ma_result result = MA_SUCCESS;
     ma_uint32 totalFramesProcessed = 0;
 
@@ -24861,7 +24936,7 @@ static ma_result ma_device_read__wasapi(ma_device* pDevice, void* pFrames, ma_ui
                     /* At this point we should be able to loop back to the start of the loop and try retrieving a data buffer again. */
                 } else {
                     /* An error occurred and we need to abort. */
-                    ma_log_postf(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[WASAPI] Failed to retrieve internal buffer from capture device in preparation for reading from the device. HRESULT = %d. Stopping device.\n", (int)hr);
+                    ma_log_postf(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[WASAPI] Failed to retrieve internal buffer from capture device in preparation for reading from the device. HRESULT = 0x%08X. Stopping device.\n", hr);
                     result = ma_result_from_HRESULT(hr);
                     break;
                 }
@@ -24890,6 +24965,9 @@ static ma_result ma_device_read__wasapi(ma_device* pDevice, void* pFrames, ma_ui
 
 static ma_result ma_device_write__wasapi(ma_device* pDevice, const void* pFrames, ma_uint32 frameCount, ma_uint32* pFramesWritten)
 {
+    if (NULL == pDevice)
+        return MA_ERROR;
+
     ma_result result = MA_SUCCESS;
     ma_uint32 totalFramesProcessed = 0;
 
@@ -24957,7 +25035,14 @@ static ma_result ma_device_write__wasapi(ma_device* pDevice, const void* pFrames
                 /* We have data available. */
                 pDevice->wasapi.mappedBufferPlaybackCap = bufferSizeInFrames;
                 pDevice->wasapi.mappedBufferPlaybackLen = 0;
-            } else {
+            }
+            else if (hr == MA_AUDCLNT_E_DEVICE_INVALIDATED)
+            {
+                // 可能是设备暂时不可用，保持循环，不退出
+                Sleep(500);
+            }
+            else 
+            {
                 if (hr == MA_AUDCLNT_E_BUFFER_TOO_LARGE || hr == MA_AUDCLNT_E_BUFFER_ERROR) {
                     /* Not enough data available. We need to wait for more. */
                     if (WaitForSingleObject((HANDLE)pDevice->wasapi.hEventPlayback, MA_WASAPI_WAIT_TIMEOUT_MILLISECONDS) != WAIT_OBJECT_0) {
@@ -24966,7 +25051,7 @@ static ma_result ma_device_write__wasapi(ma_device* pDevice, const void* pFrames
                     }
                 } else {
                     /* Some error occurred. We'll need to abort. */
-                    ma_log_postf(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[WASAPI] Failed to retrieve internal buffer from playback device in preparation for writing to the device. HRESULT = %d. Stopping device.\n", (int)hr);
+                    ma_log_postf(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[WASAPI] Failed to retrieve internal buffer from playback device in preparation for writing to the device. HRESULT = 0x%08X. Stopping device.\n", hr);
                     result = ma_result_from_HRESULT(hr);
                     break;
                 }
@@ -24984,6 +25069,8 @@ static ma_result ma_device_write__wasapi(ma_device* pDevice, const void* pFrames
 static ma_result ma_device_data_loop_wakeup__wasapi(ma_device* pDevice)
 {
     MA_ASSERT(pDevice != NULL);
+    if (NULL == pDevice)
+        return MA_ERROR;
 
     if (pDevice->type == ma_device_type_capture || pDevice->type == ma_device_type_duplex || pDevice->type == ma_device_type_loopback) {
         SetEvent((HANDLE)pDevice->wasapi.hEventCapture);
@@ -25002,6 +25089,9 @@ static ma_result ma_context_uninit__wasapi(ma_context* pContext)
     ma_context_command__wasapi cmd = ma_context_init_command__wasapi(MA_CONTEXT_COMMAND_QUIT__WASAPI);
 
     MA_ASSERT(pContext != NULL);
+    if (NULL == pContext)
+        return MA_ERROR;
+
     MA_ASSERT(pContext->backend == ma_backend_wasapi);
 
     ma_context_post_command__wasapi(pContext, &cmd);
@@ -42696,12 +42786,14 @@ MA_API ma_result ma_device_post_init(ma_device* pDevice, ma_device_type deviceTy
 
 static ma_thread_result MA_THREADCALL ma_worker_thread(void* pData)
 {
-    ma_device* pDevice = (ma_device*)pData;
 #if defined(MA_WIN32) && !defined(MA_XBOX)
     HRESULT CoInitializeResult;
 #endif
 
+    ma_device* pDevice = (ma_device*)pData;
     MA_ASSERT(pDevice != NULL);
+    if (NULL == pDevice)
+        return (ma_thread_result)0;
 
 #if defined(MA_WIN32) && !defined(MA_XBOX)
     CoInitializeResult = ma_CoInitializeEx(pDevice->pContext, NULL, MA_COINIT_VALUE);
@@ -42739,7 +42831,7 @@ static ma_thread_result MA_THREADCALL ma_worker_thread(void* pData)
         MA_ASSERT(ma_device_get_state(pDevice) == ma_device_state_starting);
 
         /* If the device has a start callback, start it now. */
-        if (pDevice->pContext->callbacks.onDeviceStart != NULL) {
+        if (NULL != pDevice->pContext && pDevice->pContext->callbacks.onDeviceStart != NULL) {
             startResult = pDevice->pContext->callbacks.onDeviceStart(pDevice);
         } else {
             startResult = MA_SUCCESS;
@@ -42761,15 +42853,21 @@ static ma_thread_result MA_THREADCALL ma_worker_thread(void* pData)
 
         ma_device__on_notification_started(pDevice);
 
-        if (pDevice->pContext->callbacks.onDeviceDataLoop != NULL) {
+        if (NULL != pDevice->pContext && pDevice->pContext->callbacks.onDeviceDataLoop != NULL) {
             pDevice->pContext->callbacks.onDeviceDataLoop(pDevice);
         } else {
             /* The backend is not using a custom main loop implementation, so now fall back to the blocking read-write implementation. */
             ma_device_audio_thread__default_read_write(pDevice);
         }
 
+        if (pDevice == NULL || pDevice->pContext == NULL)
+        {
+            // 从崩溃日志中发现为NULL,理论上不可能为NULL
+            break;
+        }
+
         /* Getting here means we have broken from the main loop which happens the application has requested that device be stopped. */
-        if (pDevice->pContext->callbacks.onDeviceStop != NULL) {
+        if (NULL != pDevice->pContext && pDevice->pContext->callbacks.onDeviceStop != NULL) {
             stopResult = pDevice->pContext->callbacks.onDeviceStop(pDevice);
         } else {
             stopResult = MA_SUCCESS;    /* No stop callback with the backend. Just assume successful. */

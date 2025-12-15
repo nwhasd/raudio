@@ -95,6 +95,7 @@ typedef struct Wave {
 } Wave;
 
 // Opaque structs declaration
+// NOTE: Actual structs are defined internally in raudio module
 typedef struct rAudioBuffer rAudioBuffer;
 typedef struct rAudioProcessor rAudioProcessor;
 
@@ -138,7 +139,7 @@ extern "C" {            // Prevents name mangling of functions
 #endif
 
 // Audio device management functions
-void InitAudioDevice(const char * log, int logLevel);           // Initialize audio device and context
+void InitAudioDevice(char * useBackends, const char * log, int logLevel); // Initialize audio device and context
 void CloseAudioDevice(void);                                    // Close the audio device and context
 bool IsAudioDeviceReady(void);                                  // Check if audio device has been initialized successfully
 void SetMasterVolume(float volume);                             // Set master volume (listener)
@@ -146,13 +147,13 @@ float GetMasterVolume(void);                                    // Get master vo
 
 // Wave/Sound loading/unloading functions
 Wave LoadWave(const char *fileName);                            // Load wave data from file
-Wave LoadWaveFromMemory(const char *fileType, const unsigned char *fileData, int dataSize); // Load wave from memory buffer, fileType refers to extension: i.e. ".wav"
-bool IsWaveReady(Wave wave);                                    // Checks if wave data is ready
+Wave LoadWaveFromMemory(const char *fileType, const unsigned char *fileData, int dataSize); // Load wave from memory buffer, fileType refers to extension: i.e. '.wav'
+bool IsWaveValid(Wave wave);                                    // Checks if wave data is valid (data loaded and parameters)
 Sound LoadSound(const char *fileName);                          // Load sound from file
 Sound LoadSoundFromWave(Wave wave);                             // Load sound from wave data
 Sound LoadSoundAlias(Sound source);                             // Create a new sound that shares the same sample data as the source sound, does not own the sound data
-bool IsSoundReady(Sound sound);                                 // Checks if a sound is ready
-void UpdateSound(Sound sound, const void *data, int frameCount);// Update sound buffer with new data
+bool IsSoundValid(Sound sound);                                 // Checks if a sound is valid (data loaded and buffers initialized)
+void UpdateSound(Sound sound, const void *data, int sampleCount); // Update sound buffer with new data (data and frame count should fit in sound)
 void UnloadWave(Wave wave);                                     // Unload wave data
 void UnloadSound(Sound sound);                                  // Unload sound
 void UnloadSoundAlias(Sound alias);                             // Unload a sound alias (does not deallocate sample data)
@@ -169,17 +170,17 @@ bool IsSoundStopPlaying(Sound sound);                           // Check if a so
 bool IsSoundPaused(Sound sound);                                // Check if a sound is paused(À©Õ¹)
 void SetSoundVolume(Sound sound, float volume);                 // Set volume for a sound (1.0 is max level)
 void SetSoundPitch(Sound sound, float pitch);                   // Set pitch for a sound (1.0 is base level)
-void SetSoundPan(Sound sound, float pan);                       // Set pan for a sound (0.0 to 1.0, 0.5=center)
+void SetSoundPan(Sound sound, float pan);                       // Set pan for a sound (0.5 is center)
 Wave WaveCopy(Wave wave);                                       // Copy a wave to a new wave
-void WaveCrop(Wave *wave, int initSample, int finalSample);     // Crop a wave to defined samples range
+void WaveCrop(Wave *wave, int initFrame, int finalFrame);       // Crop a wave to defined frames range
 void WaveFormat(Wave *wave, int sampleRate, int sampleSize, int channels);  // Convert wave data to desired format
-float *LoadWaveSamples(Wave wave);                              // Load samples data from wave as a floats array
+float *LoadWaveSamples(Wave wave);                              // Load samples data from wave as a 32bit float data array
 void UnloadWaveSamples(float *samples);                         // Unload samples data loaded with LoadWaveSamples()
 
 // Music management functions
 Music LoadMusicStream(const char *fileName);                    // Load music stream from file
 Music LoadMusicStreamFromMemory(const char *fileType, const unsigned char* data, int dataSize); // Load music stream from data
-bool IsMusicReady(Music music);                                 // Checks if a music stream is ready
+bool IsMusicValid(Music music);                                 // Checks if a music stream is valid (context and buffers initialized)
 void UnloadMusicStream(Music music);                            // Unload music stream
 void PlayMusicStream(Music music);                              // Start music playing
 bool IsMusicStreamPlaying(Music music);                         // Check if music is playing
@@ -192,15 +193,15 @@ void ResumeMusicStream(Music music);                            // Resume playin
 void SeekMusicStream(Music music, float position);              // Seek music to a position (in seconds)
 void SetMusicVolume(Music music, float volume);                 // Set volume for music (1.0 is max level)
 void SetMusicPitch(Music music, float pitch);                   // Set pitch for a music (1.0 is base level)
-void SetMusicPan(Music music, float pan);                       // Set pan for a music (0.0 to 1.0, 0.5=center)
+void SetMusicPan(Music music, float pan);                       // Set pan for a music (0.5 is center)
 float GetMusicTimeLength(Music music);                          // Get music time length (in seconds)
 float GetMusicTimePlayed(Music music);                          // Get current music time played (in seconds)
 
 // AudioStream management functions
 AudioStream LoadAudioStream(unsigned int sampleRate, unsigned int sampleSize, unsigned int channels); // Load audio stream (to stream raw audio pcm data)
-bool IsAudioStreamReady(AudioStream stream);                    // Checks if an audio stream is ready
+bool IsAudioStreamValid(AudioStream stream);                    // Checks if an audio stream is valid (buffers initialized)
 void UnloadAudioStream(AudioStream stream);                     // Unload audio stream and free memory
-void UpdateAudioStream(AudioStream stream, const void *data, int samplesCount); // Update audio stream buffers with data
+void UpdateAudioStream(AudioStream stream, const void *data, int frameCount); // Update audio stream buffers with data
 bool IsAudioStreamProcessed(AudioStream stream);                // Check if any audio stream buffers requires refill
 void PlayAudioStream(AudioStream stream);                       // Play audio stream
 void PauseAudioStream(AudioStream stream);                      // Pause audio stream
@@ -211,14 +212,14 @@ bool IsAudioStreamPaused(AudioStream stream);                   // Check if audi
 void StopAudioStream(AudioStream stream);                       // Stop audio stream
 void SetAudioStreamVolume(AudioStream stream, float volume);    // Set volume for audio stream (1.0 is max level)
 void SetAudioStreamPitch(AudioStream stream, float pitch);      // Set pitch for audio stream (1.0 is base level)
-void SetAudioStreamPan(AudioStream strean, float pan);          // Set pan for audio stream  (0.0 to 1.0, 0.5=center)
+void SetAudioStreamPan(AudioStream stream, float pan);          // Set pan for audio stream (0.5 is centered)
 void SetAudioStreamBufferSizeDefault(int size);                 // Default size for new audio streams
 void SetAudioStreamCallback(AudioStream stream, AudioCallback callback);  // Audio thread callback to request new data
 
-void AttachAudioStreamProcessor(AudioStream stream, AudioCallback processor); // Attach audio stream processor to stream
+void AttachAudioStreamProcessor(AudioStream stream, AudioCallback processor); // Attach audio stream processor to stream, receives frames x 2 samples as 'float' (stereo)
 void DetachAudioStreamProcessor(AudioStream stream, AudioCallback processor); // Detach audio stream processor from stream
 
-void AttachAudioMixedProcessor(AudioCallback processor); // Attach audio stream processor to the entire audio pipeline
+void AttachAudioMixedProcessor(AudioCallback processor); // Attach audio stream processor to the entire audio pipeline, receives frames x 2 samples as 'float' (stereo)
 void DetachAudioMixedProcessor(AudioCallback processor); // Detach audio stream processor from the entire audio pipeline
 
 #ifdef __cplusplus
