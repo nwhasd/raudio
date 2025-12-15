@@ -5,18 +5,9 @@ project(raudio
     LANGUAGES C
 )
 
-# Config options
-option(BUILD_RAUDIO_EXAMPLES "Build the examples." OFF)
-
-# Force building examples if building in the root as standalone.
-if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    set(BUILD_RAUDIO_EXAMPLES TRUE)
-endif()
-
 # Directory Variables
 set(RAUDIO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 set(RAUDIO_SRC ${RAUDIO_ROOT}/src)
-set(RAUDIO_EXAMPLES ${RAUDIO_ROOT}/examples)
 
 option(SUPPORT_FILEFORMAT_WAV "WAV Support" TRUE)
 option(SUPPORT_FILEFORMAT_OGG "OGG Support" TRUE)
@@ -42,13 +33,6 @@ target_compile_definitions(raudio PUBLIC
     SUPPORT_MODULE_RAUDIO
 )
 
-# Dependenices
-if(NOT MSVC)
-    target_link_libraries(raudio
-        m # math
-    )
-endif()
-
 # Audio file support options
 if (SUPPORT_FILEFORMAT_WAV)
     target_compile_definitions(raudio PUBLIC SUPPORT_FILEFORMAT_WAV)
@@ -70,26 +54,4 @@ if (SUPPORT_FILEFORMAT_XM)
 endif()
 if (SUPPORT_FILEFORMAT_MOD)
     target_compile_definitions(raudio PUBLIC SUPPORT_FILEFORMAT_MOD)
-endif()
-
-# Examples
-if (BUILD_RAUDIO_EXAMPLES)
-    # Create a list of all examples
-    set(examples)
-    file(GLOB sources ${RAUDIO_EXAMPLES}/*.c)
-    list(APPEND examples ${sources})
-
-    # Build each example
-    foreach(example_source ${examples})
-        # Create the basename for the example
-        get_filename_component(example_name ${example_source} NAME)
-        string(REPLACE ".c" "${OUTPUT_EXT}" example_name ${example_name})
-
-        # Setup the example
-        add_executable(${example_name} ${example_source})
-        target_link_libraries(${example_name} PUBLIC raudio)
-    endforeach()
-
-    # Resources
-    file(COPY ${RAUDIO_EXAMPLES}/resources DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 endif()
